@@ -14,6 +14,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <linux/uinput.h>
+#include <fcntl.h>
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -41,6 +43,9 @@ struct wr_wayland {
     struct ext_image_copy_capture_session_v1 *session;
     struct zwlr_virtual_pointer_v1 *pointer;
     struct zwp_virtual_keyboard_v1 *keyboard;
+
+    bool use_uinput;
+    int uinput_fd;
 
     // Negotiated once, at session done.
     uint32_t width, height, format;
@@ -295,6 +300,7 @@ static const char *find_wayland_socket(void) {
 struct wr_wayland *wr_open(const char **error) {
     struct wr_wayland *w = calloc(1, sizeof(*w));
     if (!w) { *error = "out of memory"; return NULL; }
+    w->uinput_fd = -1;
 
     w->display = wl_display_connect(NULL);
     if (!w->display) {
@@ -328,6 +334,10 @@ fail:
 
 void wr_close(struct wr_wayland *w) {
     if (!w) return;
+    if (w->uinput_fd >= 0) {
+        ioctl(w->uinput_fd, UI_DEV_DESTROY);
+        close(w->uinput_fd);
+    }
     if (w->pixels) munmap(w->pixels, w->size);
     if (w->display) wl_display_disconnect(w->display);
     free(w);
@@ -618,20 +628,84 @@ static bool send_keymap(struct wr_wayland *w, const char **error) {
     return true;
 }
 
-bool wr_input_open(struct wr_wayland *w, const char **error) {
-    if (!w->pointer_manager) {
-        *error = "compositor does not offer wlr-virtual-pointer "
-                 "(without it a remote pointer cannot move)";
-        return false;
+static int uinput_open(struct wr_wayland *w) {
+    int fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+    if (fd < 0) {
+        fprintf(stderr, "wayrdp: uinput open failed: %s\n", strerror(errno));
+        return -1;
     }
+    ioctl(fd, UI_SET_EVBIT, EV_KEY);
+    ioctl(fd, UI_SET_KEYBIT, BTN_LEFT);
+    ioctl(fd, UI_SET_KEYBIT, BTN_RIGHT);
+    ioctl(fd, UI_SET_KEYBIT, BTN_MIDDLE);
+    ioctl(fd, UI_SET_EVBIT, EV_REL);
+    ioctl(fd, UI_SET_RELBIT, REL_X);
+    ioctl(fd, UI_SET_RELBIT, REL_Y);
+    ioctl(fd, UI_SET_RELBIT, REL_WHEEL);
+    ioctl(fd, UI_SET_RELBIT, REL_HWHEEL);
+    ioctl(fd, UI_SET_EVBIT, EV_ABS);
+    ioctl(fd, UI_SET_ABSBIT, ABS_X);
+    ioctl(fd, UI_SET_ABSBIT, ABS_Y);
+
+    struct uinput_setup setup = {0};
+    snprintf(setup.name, UINPUT_MAX_NAME_SIZE, "wayrdp-virtual-pointer");
+    setup.id.bustype = BUS_USB;
+    setup.id.vendor = 0x1234;
+    setup.id.product = 0x5679;
+
+    if (ioctl(fd, UI_DEV_SETUP, &setup) < 0) {
+        fprintf(stderr, "wayrdp: uinput setup failed: %s\n", strerror(errno));
+        close(fd);
+        return -1;
+    }
+
+    struct uinput_abs_setup abs_x = {0};
+    abs_x.code = ABS_X;
+    abs_x.absinfo.minimum = 0;
+    abs_x.absinfo.maximum = w->width ? w->width : 1920;
+    ioctl(fd, UI_ABS_SETUP, &abs_x);
+
+    struct uinput_abs_setup abs_y = {0};
+    abs_y.code = ABS_Y;
+    abs_y.absinfo.minimum = 0;
+    abs_y.absinfo.maximum = w->height ? w->height : 1080;
+    ioctl(fd, UI_ABS_SETUP, &abs_y);
+
+    if (ioctl(fd, UI_DEV_CREATE) < 0) {
+        fprintf(stderr, "wayrdp: uinput create failed: %s\n", strerror(errno));
+        close(fd);
+        return -1;
+    }
+    fprintf(stderr, "wayrdp: uinput virtual pointer created (%ux%u)\n", w->width, w->height);
+    return fd;
+}
+
+static void uinput_emit(int fd, uint16_t type, uint16_t code, int32_t value) {
+    struct input_event ie = {0};
+    ie.type = type; ie.code = code; ie.value = value;
+    (void)write(fd, &ie, sizeof(ie));
+}
+
+bool wr_input_open(struct wr_wayland *w, const char **error) {
     if (!w->keyboard_manager) {
         *error = "compositor does not offer virtual-keyboard "
                  "(without it a remote keyboard cannot type)";
         return false;
     }
 
-    w->pointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer(
-        w->pointer_manager, w->seat);
+    if (w->pointer_manager) {
+        w->pointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer(
+            w->pointer_manager, w->seat);
+    } else {
+        w->uinput_fd = uinput_open(w);
+        if (w->uinput_fd < 0) {
+            *error = "compositor does not offer wlr-virtual-pointer and uinput fallback failed";
+            return false;
+        }
+        w->use_uinput = true;
+        fprintf(stderr, "wayrdp: using uinput for pointer injection\n");
+    }
+
     w->keyboard = zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(
         w->keyboard_manager, w->seat);
 
@@ -642,6 +716,12 @@ bool wr_input_open(struct wr_wayland *w, const char **error) {
 }
 
 void wr_pointer_motion(struct wr_wayland *w, uint32_t x, uint32_t y) {
+    if (w->use_uinput && w->uinput_fd >= 0) {
+        uinput_emit(w->uinput_fd, EV_ABS, ABS_X, x);
+        uinput_emit(w->uinput_fd, EV_ABS, ABS_Y, y);
+        uinput_emit(w->uinput_fd, EV_SYN, SYN_REPORT, 0);
+        return;
+    }
     if (!w->pointer) return;
     // Absolute, in output pixels: RDP sends a position, not a delta, and
     // converting to deltas would accumulate error and fight pointer
@@ -653,6 +733,11 @@ void wr_pointer_motion(struct wr_wayland *w, uint32_t x, uint32_t y) {
 }
 
 void wr_pointer_button(struct wr_wayland *w, uint32_t button, bool pressed) {
+    if (w->use_uinput && w->uinput_fd >= 0) {
+        uinput_emit(w->uinput_fd, EV_KEY, button, pressed ? 1 : 0);
+        uinput_emit(w->uinput_fd, EV_SYN, SYN_REPORT, 0);
+        return;
+    }
     if (!w->pointer) return;
     zwlr_virtual_pointer_v1_button(w->pointer, now_ms(), button,
         pressed ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED);
@@ -661,6 +746,12 @@ void wr_pointer_button(struct wr_wayland *w, uint32_t button, bool pressed) {
 }
 
 void wr_pointer_axis(struct wr_wayland *w, bool horizontal, double value) {
+    if (w->use_uinput && w->uinput_fd >= 0) {
+        int16_t ticks = (int16_t)(value > 0 ? 1 : -1);
+        uinput_emit(w->uinput_fd, EV_REL, horizontal ? REL_HWHEEL : REL_WHEEL, ticks);
+        uinput_emit(w->uinput_fd, EV_SYN, SYN_REPORT, 0);
+        return;
+    }
     if (!w->pointer) return;
     zwlr_virtual_pointer_v1_axis(w->pointer, now_ms(),
         horizontal ? WL_POINTER_AXIS_HORIZONTAL_SCROLL : WL_POINTER_AXIS_VERTICAL_SCROLL,

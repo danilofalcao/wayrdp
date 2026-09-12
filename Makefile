@@ -5,7 +5,7 @@
 # itself. Nothing here needs the AUR.
 
 STAGING := /usr/share/wayland-protocols/staging
-WLR     := /usr/share/wlr-protocols/unstable
+WLR     := wlr-protocols
 
 # virtual-keyboard is the one protocol no Arch package installs: it lives in the
 # wlroots source tree and is not shipped. protocols/ holds that copy, taken
