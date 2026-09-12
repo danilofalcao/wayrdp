@@ -6,3 +6,5 @@ build/
 /wayrdp-*.tar.gz
 /*.log*
 /pkg/
+
+session-*.md
