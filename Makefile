@@ -28,7 +28,7 @@ PROTO_HDRS  := $(patsubst %,$(GEN)/%-client-protocol.h,$(PROTO_NAMES))
 PROTO_SRCS  := $(patsubst %,$(GEN)/%-protocol.c,$(PROTO_NAMES))
 PROTO_OBJS  := $(PROTO_SRCS:.c=.o)
 
-DEPS    := wayland-client xkbcommon freerdp3 freerdp-server3 winpr3 libpipewire-0.3
+DEPS    := wayland-client xkbcommon freerdp3 freerdp-server3 winpr3 libpipewire-0.3 libcrypto
 CFLAGS  ?= -O2
 CFLAGS  += -std=c11 -Wall -Wextra
 # Dependency headers go in as system headers: FreeRDP/WinPR mark parts of their
@@ -51,7 +51,7 @@ $(BUILD)/%.o: src/%.c | $(PROTO_HDRS)
 $(BUILD)/wayrdp-probe: $(BUILD)/probe.o $(BUILD)/wayland.o $(PROTO_OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
-$(BUILD)/wayrdp: $(BUILD)/main.o $(BUILD)/rdp.o $(BUILD)/config.o $(BUILD)/audio.o $(BUILD)/wayland.o $(PROTO_OBJS)
+$(BUILD)/wayrdp: $(BUILD)/main.o $(BUILD)/rdp.o $(BUILD)/config.o $(BUILD)/password.o $(BUILD)/audio.o $(BUILD)/wayland.o $(PROTO_OBJS)
 	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
 $(GEN)/%-protocol.o: $(GEN)/%-protocol.c

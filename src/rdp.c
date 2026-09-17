@@ -38,6 +38,7 @@
 #include <winpr/wtsapi.h>
 
 #include "audio.h"
+#include "password.h"
 #include "rdp.h"
 
 struct wr_server {
@@ -183,6 +184,15 @@ static bool equal_secret(const char *given, UINT32 given_len, const char *expect
     return diff == 0;
 }
 
+// A configured hash wins over a stored secret, so a config that carries both
+// migrates on its own and a plaintext one keeps working until it is rewritten.
+static bool password_matches(const struct wr_config *config,
+                             const char *given, size_t given_len) {
+    if (config->password_hash[0])
+        return wr_password_verify(given, given_len, config->password_hash);
+    return equal_secret(given, (UINT32)given_len, config->password);
+}
+
 // Fires once the tunnel is up. With NLA the identity is filled in and this is
 // the check; with a plain TLS tunnel -- which is what this server offers --
 // it fires *before* the client has sent anything, and the identity is empty.
@@ -207,7 +217,7 @@ static BOOL peer_logon(freerdp_peer *peer, const SEC_WINNT_AUTH_IDENTITY *identi
     }
 
     bool ok = equal_secret(user, user_len, s->config.username) &&
-              equal_secret(password, password_len, s->config.password);
+              password_matches(&s->config, password, password_len);
 
     fprintf(stderr, "wayrdp: %s for '%.*s' from %s\n",
             ok ? "login accepted" : "login refused",
@@ -711,7 +721,7 @@ static BOOL peer_post_connect(freerdp_peer *peer) {
 
         bool ok = user && password &&
                   equal_secret(user, (UINT32)strlen(user), s->config.username) &&
-                  equal_secret(password, (UINT32)strlen(password), s->config.password);
+                  password_matches(&s->config, password, strlen(password));
 
         fprintf(stderr, "wayrdp: %s for '%s' from %s\n",
                 ok ? "login accepted" : "login refused",

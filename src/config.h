@@ -1,16 +1,21 @@
-// config.h — port, username and password, as the panel writes them.
+// config.h — port, username and credential, as the panel writes them.
 
 #ifndef WAYRDP_CONFIG_H
 #define WAYRDP_CONFIG_H
 
 #include <stdbool.h>
 
+#include "password.h"
+
 #define WR_MAX_FIELD 128
 
 struct wr_config {
     int port;
     char username[WR_MAX_FIELD];
+    // The panel may write either the secret itself, or (preferred) a scrypt
+    // hash of it. The hash wins when both are present.
     char password[WR_MAX_FIELD];
+    char password_hash[WR_PASSWORD_ENCODED_MAX];
     char bind_address[WR_MAX_FIELD];
 
     char cert_path[512];

@@ -77,6 +77,8 @@ bool wr_config_load(struct wr_config *cfg, const char **error) {
             snprintf(cfg->username, sizeof(cfg->username), "%s", value);
         else if (!strcmp(key, "password"))
             snprintf(cfg->password, sizeof(cfg->password), "%s", value);
+        else if (!strcmp(key, "password_hash"))
+            snprintf(cfg->password_hash, sizeof(cfg->password_hash), "%s", value);
         else if (!strcmp(key, "bind"))
             snprintf(cfg->bind_address, sizeof(cfg->bind_address), "%s", value);
     }
@@ -94,7 +96,14 @@ bool wr_config_usable(const struct wr_config *cfg, const char **why) {
         return false;
     }
     // A server anyone can walk into is worse than one that will not start.
-    if (!cfg->password[0]) {
+    // Either the secret or a hash of it satisfies the requirement; a malformed
+    // hash is treated as no credential so a typo cannot silently open the port.
+    if (cfg->password_hash[0]) {
+        if (!wr_password_is_hash(cfg->password_hash)) {
+            *why = "password_hash is not a supported scrypt value";
+            return false;
+        }
+    } else if (!cfg->password[0]) {
         *why = "no password set";
         return false;
     }

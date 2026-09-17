@@ -46,7 +46,8 @@ The core remote-desktop path is implemented and usable:
 - keyboard-layout discovery through XKB environment variables or
   `systemd-localed` configuration;
 - TLS transport with an automatically generated self-signed certificate;
-- username and password validation;
+- username and password validation, from either a plaintext secret or a salted
+  scrypt hash;
 - desktop audio sent to the RDP client;
 - client microphone exposed as a PipeWire source;
 - sequential reconnects, with one active client at a time;
@@ -168,6 +169,7 @@ freerdp3
 freerdp-server3
 winpr3
 libpipewire-0.3
+libcrypto
 ```
 
 It also needs the staging XML files from `wayland-protocols`, the unstable XML
@@ -277,7 +279,9 @@ port = 3389
 bind = 127.0.0.1
 
 username = danilo
-password = replace-this-with-a-strong-password
+
+# Printed by: wayrdp --hash-password
+password_hash = scrypt$ln=15,r=8,p=1$c2FsdA==$a2V5
 ```
 
 | Key | Required | Default | Description |
@@ -285,11 +289,29 @@ password = replace-this-with-a-strong-password
 | `port` | No | `3389` | TCP port from 1 through 65535 |
 | `bind` | No | `0.0.0.0` | Address passed to the FreeRDP listener |
 | `username` | Yes | None | RDP login name |
-| `password` | Yes | None | RDP password, stored as plain text in this file |
+| `password_hash` | Yes* | None | Salted scrypt hash, as printed by `wayrdp --hash-password` |
+| `password` | Yes* | None | Plaintext password, kept for compatibility; ignored when a hash is present |
 
 Blank lines, surrounding whitespace and comments beginning with `#` are
-accepted. Unknown keys are ignored. The server refuses to listen unless both a
-username and a non-empty password are configured.
+accepted. Unknown keys are ignored. The server refuses to listen unless a
+username and either a non-empty `password` or a valid `password_hash` are
+configured.
+
+### Hashing the password
+
+The server only has to verify a password, never recover it, so it needs a hash,
+not the secret itself. Generate one from a terminal:
+
+```bash
+wayrdp --hash-password
+```
+
+It reads the password without echo and prints a self-describing scrypt string to
+put after `password_hash =`. (It also accepts the password on standard input, so
+a panel can pipe it instead of prompting.) Every run uses a fresh random salt,
+so hashing the same password twice yields different values. A leaked
+configuration file then yields no usable secret, and there is no key to protect
+the way reversible encryption would need.
 
 ## Checking compatibility
 
@@ -462,8 +484,9 @@ before deployment:
 - The private key is set to mode `0600`. Clients must validate and remember the
   certificate fingerprint themselves.
 - The configured password is compared without returning at the first mismatched
-  byte, but it is stored in plain text. Protect the configuration file with mode
-  `0600` and protect the user account that owns it.
+  byte. Prefer `password_hash`, a salted scrypt value, so the file holds no
+  recoverable secret; a plaintext `password` is still accepted for compatibility
+  and should be protected with mode `0600`.
 - There is no brute-force throttling, account lockout, external identity provider
   or security audit.
 
@@ -479,6 +502,7 @@ Do not expose the server directly to the public internet in its current form.
 └── src/
     ├── main.c       Process lifecycle, readiness check and signal handling
     ├── config.c     Config parsing, validation and TLS certificate creation
+    ├── password.c   Salted scrypt hashing and verification
     ├── wayland.c    Output capture, shared memory and virtual input
     ├── rdp.c        FreeRDP listener, authentication, RemoteFX and channels
     ├── audio.c      PipeWire streams and synchronized ring buffers
