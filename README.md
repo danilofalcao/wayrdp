@@ -291,6 +291,14 @@ password_hash = scrypt$ln=15,r=8,p=1$c2FsdA==$a2V5
 | `username` | Yes | None | RDP login name |
 | `password_hash` | Yes* | None | Salted scrypt hash, as printed by `wayrdp --hash-password` |
 | `password` | Yes* | None | Plaintext password, kept for compatibility; ignored when a hash is present |
+| `state_dir` | No | `~/.local/share/wayrdp` | Directory holding the TLS certificate and key |
+| `cert` | No | `<state_dir>/tls.crt` | Certificate path, overriding `state_dir` for that file |
+| `key` | No | `<state_dir>/tls.key` | Private key path, overriding `state_dir` for that file |
+
+A shared `state_dir` or an explicit `cert`/`key` pair lets more than one account
+serve the same machine under one certificate. Generate the pair once, make it
+readable by the group those accounts share, and no re-issue is needed: an
+existing certificate is reused as is, never regenerated or re-permissioned.
 
 Blank lines, surrounding whitespace and comments beginning with `#` are
 accepted. Unknown keys are ignored. The server refuses to listen unless a

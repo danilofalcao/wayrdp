@@ -18,6 +18,10 @@ struct wr_config {
     char password_hash[WR_PASSWORD_ENCODED_MAX];
     char bind_address[WR_MAX_FIELD];
 
+    // Where the TLS certificate and key live. `state_dir` defaults to
+    // ~/.local/share/wayrdp; `cert` and `key` override the two files directly,
+    // so a shared, group-readable pair can serve several invocations.
+    char state_dir[256];
     char cert_path[512];
     char key_path[512];
     char path[512];                 // where this was read from

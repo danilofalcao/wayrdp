@@ -21,7 +21,7 @@ static void trim(char *s) {
         s[--n] = 0;
 }
 
-static void state_dir(char *out, size_t size) {
+static void default_state_dir(char *out, size_t size) {
     const char *home = getenv("HOME");
     snprintf(out, size, "%s/.local/share/wayrdp", home ? home : "/tmp");
 }
@@ -31,10 +31,10 @@ bool wr_config_load(struct wr_config *cfg, const char **error) {
     cfg->port = 3389;
     snprintf(cfg->bind_address, sizeof(cfg->bind_address), "0.0.0.0");
 
-    char dir[256];
-    state_dir(dir, sizeof(dir));
-    snprintf(cfg->cert_path, sizeof(cfg->cert_path), "%s/tls.crt", dir);
-    snprintf(cfg->key_path, sizeof(cfg->key_path), "%s/tls.key", dir);
+    bool custom_state = false, custom_cert = false, custom_key = false;
+    default_state_dir(cfg->state_dir, sizeof(cfg->state_dir));
+    snprintf(cfg->cert_path, sizeof(cfg->cert_path), "%s/tls.crt", cfg->state_dir);
+    snprintf(cfg->key_path, sizeof(cfg->key_path), "%s/tls.key", cfg->state_dir);
 
     const char *explicit_path = getenv("WAYRDP_CONFIG");
     if (explicit_path) {
@@ -81,8 +81,24 @@ bool wr_config_load(struct wr_config *cfg, const char **error) {
             snprintf(cfg->password_hash, sizeof(cfg->password_hash), "%s", value);
         else if (!strcmp(key, "bind"))
             snprintf(cfg->bind_address, sizeof(cfg->bind_address), "%s", value);
+        else if (!strcmp(key, "state_dir")) {
+            snprintf(cfg->state_dir, sizeof(cfg->state_dir), "%s", value);
+            custom_state = true;
+        } else if (!strcmp(key, "cert")) {
+            snprintf(cfg->cert_path, sizeof(cfg->cert_path), "%s", value);
+            custom_cert = true;
+        } else if (!strcmp(key, "key")) {
+            snprintf(cfg->key_path, sizeof(cfg->key_path), "%s", value);
+            custom_key = true;
+        }
     }
     fclose(f);
+
+    // A custom state directory relocates both files unless each was named.
+    if (custom_state) {
+        if (!custom_cert) snprintf(cfg->cert_path, sizeof(cfg->cert_path), "%s/tls.crt", cfg->state_dir);
+        if (!custom_key) snprintf(cfg->key_path, sizeof(cfg->key_path), "%s/tls.key", cfg->state_dir);
+    }
     return true;
 }
 
@@ -118,10 +134,9 @@ static bool file_exists(const char *path) {
 bool wr_config_ensure_certificate(struct wr_config *cfg, const char **error) {
     if (file_exists(cfg->cert_path) && file_exists(cfg->key_path)) return true;
 
-    char dir[256];
-    state_dir(dir, sizeof(dir));
-    if (mkdir(dir, 0700) != 0 && errno != EEXIST) {
-        *error = "could not create ~/.local/share/wayrdp";
+    // Create the state directory in case a relocated one does not exist yet.
+    if (mkdir(cfg->state_dir, 0700) != 0 && errno != EEXIST) {
+        *error = "could not create the wayrdp state directory";
         return false;
     }
 
